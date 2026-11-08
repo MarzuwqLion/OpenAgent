@@ -26,4 +26,7 @@ if ! git config --global --get-all safe.directory | grep -qxF "$DATA"; then
   git config --global --add safe.directory "$DATA"
 fi
 
+# A09: files created at runtime (agent.db, WAL/SHM, MEMORY.md, .git objects) must not be world-readable.
+umask 077
+
 exec "$@"

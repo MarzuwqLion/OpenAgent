@@ -36,6 +36,12 @@ function loadConfigOrExit(): Config {
 }
 
 async function main(): Promise<void> {
+  // A09: everything this process creates under DATA_DIR (agent.db + WAL/SHM, MEMORY.md,
+  // skills, git objects) must be private from the first write. Without this, files made
+  // after the entrypoint's chmod are 0644, and the 0711 data dir lets the sandbox user
+  // read agent.db by path until the next restart. (Found at the Wave 2 gate.)
+  if (process.platform !== 'win32') process.umask(0o077);
+
   const cfg = loadConfigOrExit();
 
   await initDataRepo();
