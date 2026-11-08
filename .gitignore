@@ -1,0 +1,8 @@
+node_modules/
+data/
+.env
+dist/
+coverage/
+*.log
+.claude/worktrees/
+.claude/settings.local.json
