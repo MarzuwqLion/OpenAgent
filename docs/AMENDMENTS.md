@@ -75,6 +75,7 @@ These correct gaps in the blueprint in CLAUDE.md. **Where this file and CLAUDE.m
 
 **A11 [CORE] Guard memory writes after browsing.**
 - If any `browser_*` tool ran earlier in the current turn, then `update_global_memory`, `update_skill` and `create_skill` need approval (dynamic `needsApproval`). Track this in `ctx.turnState.browserUsed`.
+- The same rule covers every other tool that makes a change outliving the turn: `switch_model` with a persistent scope (skill or global; the thread scope is exempt) and `schedule_followup`. *(Added in Wave 1 after the reviewer showed both bypass the guard.)*
 - This stops a web page from injecting a permanent rule like "never ask for approval".
 
 **A12 [CORE] Schedule guard.**

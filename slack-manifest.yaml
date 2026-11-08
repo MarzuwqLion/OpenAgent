@@ -1,0 +1,42 @@
+display_information:
+  name: OpenAgent
+  description: Self-hosted, model-agnostic Slack agent
+  background_color: "#1f2937"
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true            # A14: lets users DM the bot
+    messages_tab_read_only_enabled: false # A14
+  bot_user:
+    display_name: OpenAgent
+    always_online: true
+  slash_commands:
+    - command: /model
+      description: Show or switch the active model
+      usage_hint: "[provider:model]"
+      should_escape: false
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - channels:history
+      - chat:write
+      - commands
+      - files:write
+      - groups:history
+      - im:history
+      - im:read
+      - im:write
+      - reactions:write                   # A14
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.channels
+      - message.groups
+      - message.im
+  interactivity:
+    is_enabled: true                      # A14: Approve / Reject buttons
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

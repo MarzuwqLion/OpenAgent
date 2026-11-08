@@ -1,0 +1,12 @@
+services:
+  openagent:
+    build: .
+    image: openagent:latest
+    container_name: openagent
+    env_file: .env          # includes TZ (A18); also passed through for the scheduler
+    init: true              # reap Chromium zombies
+    ipc: host               # Chromium shared memory
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data    # the ONLY host mount (A09)
+    # No ports (Socket Mode is outbound-only) and no privileged flag.
