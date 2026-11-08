@@ -78,6 +78,11 @@ These correct gaps in the blueprint in CLAUDE.md. **Where this file and CLAUDE.m
 - The same rule covers every other tool that makes a change outliving the turn: `switch_model` with a persistent scope (skill or global; the thread scope is exempt) and `schedule_followup`. *(Added in Wave 1 after the reviewer showed both bypass the guard.)*
 - This stops a web page from injecting a permanent rule like "never ask for approval".
 
+**A24 [CORE] Typing into web pages needs approval.** *(Added at the Wave 1 check-in, by the user's decision.)*
+- `browser_type` always needs approval. The Slack preview shows the page URL, the target selector and the text to be typed.
+- `browser_navigate`, `browser_click`, `browser_extract_text` and `browser_screenshot` stay ungated, so browsing stays usable.
+- This stops a page's injected instructions from making the agent fill in forms or log in with data from the chat. Exfiltration via navigation URLs is checked in the Wave 3 audit.
+
 **A12 [CORE] Schedule guard.**
 - Validate cron expressions with croner before saving.
 - Reject anything that fires more often than every 15 minutes, to keep model costs bounded.

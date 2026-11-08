@@ -6,9 +6,11 @@
  * whenever getConfig() returns a new object.
  */
 import { createAnthropic } from '@ai-sdk/anthropic';
+import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { createXai } from '@ai-sdk/xai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createProviderRegistry, type LanguageModel } from 'ai';
 import { configuredProviders, getConfig, PROVIDERS, PROVIDER_KEY_ENV, type Config, type ProviderName } from './config.js';
@@ -20,7 +22,8 @@ type Registry = ReturnType<typeof createProviderRegistry<RegistryProviders>>;
 /**
  * Suggested model IDs per provider, taken from the model-ID unions of the
  * installed provider packages (@ai-sdk/anthropic 4.0.99, @ai-sdk/openai
- * 4.0.111, @ai-sdk/google 4.0.114). Any other model string the provider
+ * 4.0.111, @ai-sdk/google 4.0.114, @ai-sdk/deepseek 3.0.81, @ai-sdk/xai
+ * 5.0.40; xAI image/video/voice models skipped). Any other model string the provider
  * accepts also works; these are only what the agent advertises.
  */
 const SUGGESTED_MODELS: Record<Exclude<ProviderName, 'custom'>, string[]> = {
@@ -29,6 +32,8 @@ const SUGGESTED_MODELS: Record<Exclude<ProviderName, 'custom'>, string[]> = {
   google: ['gemini-pro-latest', 'gemini-flash-latest', 'gemini-3.1-pro-preview', 'gemini-2.5-pro', 'gemini-2.5-flash'],
   // OpenRouter accepts any `vendor/model` slug (its type is plain string).
   openrouter: ['anthropic/claude-sonnet-5-5', 'openai/gpt-5.5', 'google/gemini-2.5-pro'],
+  deepseek: ['deepseek-v4-pro', 'deepseek-v4-flash'],
+  xai: ['grok-4.7', 'grok-4.6', 'grok-4.5', 'grok-latest', 'grok-4.20-reasoning', 'grok-4.20-non-reasoning'],
 };
 
 let cachedFor: Config | undefined;
@@ -48,6 +53,9 @@ export function getRegistry(): Registry {
   if (cfg.OPENROUTER_API_KEY) {
     providers.openrouter = createOpenRouter({ apiKey: cfg.OPENROUTER_API_KEY, compatibility: 'strict' });
   }
+  // apiKey passed explicitly: XAI_API_KEY may come from the GROK_API_KEY alias (config.ts).
+  if (cfg.DEEPSEEK_API_KEY) providers.deepseek = createDeepSeek({ apiKey: cfg.DEEPSEEK_API_KEY });
+  if (cfg.XAI_API_KEY) providers.xai = createXai({ apiKey: cfg.XAI_API_KEY });
   if (cfg.CUSTOM_BASE_URL) {
     providers.custom = createOpenAICompatible({
       name: 'custom',
@@ -95,7 +103,9 @@ export function validateModelId(id: string): ModelIdValidation {
   if (!configured.includes(provider as ProviderName)) {
     return {
       ok: false,
-      reason: `provider "${provider}" is not configured: set ${PROVIDER_KEY_ENV[provider as ProviderName]} in .env`,
+      reason: `provider "${provider}" is not configured: set ${PROVIDER_KEY_ENV[provider as ProviderName]}${
+        provider === 'xai' ? ' (or GROK_API_KEY)' : ''
+      } in .env`,
     };
   }
   return { ok: true };

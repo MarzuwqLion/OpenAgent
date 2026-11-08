@@ -21,6 +21,9 @@ chown root:root "$DATA"
 chmod 711 "$DATA"
 
 # A21: mounted volume owner differs from the container user.
-git config --global --add safe.directory "$DATA"
+# Idempotent: --add would append a duplicate line on every boot.
+if ! git config --global --get-all safe.directory | grep -qxF "$DATA"; then
+  git config --global --add safe.directory "$DATA"
+fi
 
 exec "$@"

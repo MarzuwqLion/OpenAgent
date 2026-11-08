@@ -13,7 +13,7 @@ import dotenv from 'dotenv';
 import { z } from 'zod';
 
 /** Provider prefixes accepted in `provider:model` IDs. */
-export const PROVIDERS = ['anthropic', 'openai', 'google', 'openrouter', 'custom'] as const;
+export const PROVIDERS = ['anthropic', 'openai', 'google', 'openrouter', 'deepseek', 'xai', 'custom'] as const;
 export type ProviderName = (typeof PROVIDERS)[number];
 
 /** Env var holding each provider's credential. `custom` is enabled by CUSTOM_BASE_URL instead. */
@@ -22,10 +22,14 @@ export const PROVIDER_KEY_ENV = {
   openai: 'OPENAI_API_KEY',
   google: 'GOOGLE_GENERATIVE_AI_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
+  deepseek: 'DEEPSEEK_API_KEY',
+  xai: 'XAI_API_KEY',
   custom: 'CUSTOM_BASE_URL',
 } as const satisfies Record<ProviderName, string>;
 
 export const DEFAULT_MODEL_FALLBACK = 'anthropic:claude-sonnet-5-5';
+
+const NO_PROVIDER_MESSAGE = `no LLM provider configured: set at least one of ${Object.values(PROVIDER_KEY_ENV).join(', ')}`;
 
 /** Blank strings in .env (`KEY=`) count as unset. */
 const blankToUndefined = (v: unknown) =>
@@ -85,6 +89,9 @@ const schema = z
     OPENAI_API_KEY: optionalString,
     GOOGLE_GENERATIVE_AI_API_KEY: optionalString,
     OPENROUTER_API_KEY: optionalString,
+    DEEPSEEK_API_KEY: optionalString,
+    /** xAI (Grok). GROK_API_KEY is accepted as an alias; see parseConfig. */
+    XAI_API_KEY: optionalString,
     CUSTOM_BASE_URL: z.preprocess(blankToUndefined, z.url('must be a URL').optional()),
     CUSTOM_API_KEY: optionalString,
 
@@ -114,9 +121,7 @@ const schema = z
       ctx.addIssue({
         code: 'custom',
         path: ['ANTHROPIC_API_KEY'],
-        message:
-          'no LLM provider configured: set at least one of ANTHROPIC_API_KEY, OPENAI_API_KEY, ' +
-          'GOOGLE_GENERATIVE_AI_API_KEY, OPENROUTER_API_KEY or CUSTOM_BASE_URL',
+        message: NO_PROVIDER_MESSAGE,
       });
       return;
     }
@@ -149,14 +154,15 @@ export class ConfigError extends Error {
 export function configuredProviders(
   cfg: Pick<
     Config,
-    'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY' | 'GOOGLE_GENERATIVE_AI_API_KEY' | 'OPENROUTER_API_KEY' | 'CUSTOM_BASE_URL'
+(typeof PROVIDER_KEY_ENV)[ProviderName]
   >,
 ): ProviderName[] {
   return PROVIDERS.filter((p) => Boolean(cfg[PROVIDER_KEY_ENV[p]]));
 }
 
 /** Pure: validate an env object. Throws ConfigError listing every problem. */
-export function parseConfig(env: Record<string, string | undefined>): Config {
+export function parseConfig(rawEnv: Record<string, string | undefined>): Config {
+  const env = withAliases(rawEnv);
   const result = schema.safeParse(env);
   if (!result.success) {
     const issues = result.error.issues.map((issue) => {
@@ -167,14 +173,24 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     // provider now so the user can fix everything in one pass.
     const anyProvider = PROVIDERS.some((p) => blankToUndefined(env[PROVIDER_KEY_ENV[p]]) !== undefined);
     if (!anyProvider && !issues.some((i) => i.includes('no LLM provider'))) {
-      issues.push(
-        'ANTHROPIC_API_KEY: no LLM provider configured: set at least one of ANTHROPIC_API_KEY, OPENAI_API_KEY, ' +
-          'GOOGLE_GENERATIVE_AI_API_KEY, OPENROUTER_API_KEY or CUSTOM_BASE_URL',
-      );
+      issues.push(`ANTHROPIC_API_KEY: ${NO_PROVIDER_MESSAGE}`);
     }
     throw new ConfigError(issues);
   }
   return result.data;
+}
+
+/** Alternate env var names users reach for. The canonical name wins when both are set. */
+const ENV_ALIASES: Record<string, string> = { GROK_API_KEY: 'XAI_API_KEY' };
+
+function withAliases(env: Record<string, string | undefined>): Record<string, string | undefined> {
+  const out = { ...env };
+  for (const [alias, canonical] of Object.entries(ENV_ALIASES)) {
+    if (blankToUndefined(out[canonical]) === undefined && blankToUndefined(out[alias]) !== undefined) {
+      out[canonical] = out[alias];
+    }
+  }
+  return out;
 }
 
 let dotenvLoaded = false;

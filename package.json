@@ -26,9 +26,11 @@
   "description": "Lightweight, always-on, self-hosted, model-agnostic Slack agent",
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.99",
+    "@ai-sdk/deepseek": "^3.0.81",
     "@ai-sdk/google": "^4.0.114",
     "@ai-sdk/openai": "^4.0.111",
     "@ai-sdk/openai-compatible": "^3.0.87",
+    "@ai-sdk/xai": "^5.0.40",
     "@openrouter/ai-sdk-provider": "^3.1.0",
     "@slack/bolt": "^5.1.0",
     "ai": "^7.0.165",

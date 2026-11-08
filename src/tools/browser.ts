@@ -8,6 +8,10 @@
  *   the call is announced (onInputAvailable, which the SDK runs before it
  *   evaluates needsApproval for later calls in the same step) and in execute.
  * - A06: extracted text is truncated.
+ * - A24: browser_type always needs approval. The approval preview (built by
+ *   agent.ts via browserApprovalPreview) shows the current page URL, the
+ *   selector and the text; execute refuses to type if the page's origin has
+ *   changed since that preview was shown.
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -71,6 +75,52 @@ export async function closeBrowser(): Promise<void> {
   const ctx = context;
   context = undefined;
   if (ctx) await ctx.close().catch(() => undefined);
+}
+
+/** URL of the shared page right now, without launching Chromium. */
+export function currentPageUrl(): string {
+  const open = context?.pages().filter((p) => !p.isClosed()) ?? [];
+  return open[open.length - 1]?.url() ?? 'about:blank';
+}
+
+function originOf(raw: string): string {
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return raw;
+  }
+}
+
+// A24: page URL shown in each browser_type approval preview, keyed by toolCallId.
+// In memory only: after a restart the approval context is gone and typing is refused.
+const APPROVED_TYPE_TARGETS_MAX = 200;
+const approvedTypeTargets = new Map<string, string>();
+
+function clip(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+/**
+ * A24: Slack approval preview for a gated browser tool, or undefined for any
+ * other tool. Records the page URL it showed so execute can verify the page
+ * is still on the same origin. Output stays within `max` chars; the URL and
+ * selector are clipped first so the text to be typed stays visible.
+ */
+export function browserApprovalPreview(toolName: string, toolCallId: string, input: unknown, max = 500): string | undefined {
+  if (toolName !== 'browser_type') return undefined;
+  const { selector, text, submit } = (input ?? {}) as { selector?: unknown; text?: unknown; submit?: unknown };
+  const url = currentPageUrl();
+  approvedTypeTargets.delete(toolCallId);
+  approvedTypeTargets.set(toolCallId, url);
+  while (approvedTypeTargets.size > APPROVED_TYPE_TARGETS_MAX) {
+    const oldest = approvedTypeTargets.keys().next().value;
+    if (oldest === undefined) break;
+    approvedTypeTargets.delete(oldest);
+  }
+  const head =
+    `Type into page\nURL: ${clip(url, 150)}\nSelector: ${clip(String(selector ?? ''), 100)}\n` +
+    `${submit ? 'Then press Enter\n' : ''}Text: `;
+  return head + clip(String(text ?? ''), Math.max(20, max - head.length));
 }
 
 function markBrowserUsed(ctx: ToolContext): void {
@@ -137,16 +187,30 @@ export function createBrowserTools(ctx: ToolContext) {
   });
 
   const browser_type = tool({
-    description: 'Fill text into the first input matching a selector; optionally press Enter afterwards.',
+    description:
+      'Fill text into the first input matching a selector; optionally press Enter afterwards. ' +
+      'Always requires the user to approve in Slack (they see the page URL, selector and text).',
     inputSchema: z.object({
       selector: z.string(),
       text: z.string(),
       submit: z.boolean().optional().describe('Press Enter after typing'),
     }),
+    needsApproval: true, // A24: typing into web pages always needs approval
     onInputAvailable: mark,
-    execute: async ({ selector, text, submit }) => {
+    execute: async ({ selector, text, submit }, { toolCallId }) => {
       mark();
+      // A24: refuse if the page moved to another origin since the user saw the preview.
+      const approvedUrl = approvedTypeTargets.get(toolCallId);
+      approvedTypeTargets.delete(toolCallId);
+      if (approvedUrl === undefined) {
+        throw new Error('approval context for this browser_type call is gone (agent restarted?); nothing was typed. Ask again.');
+      }
       return withPage(async (page) => {
+        if (originOf(page.url()) !== originOf(approvedUrl)) {
+          throw new Error(
+            `page changed since approval (approved on ${approvedUrl}, now on ${page.url()}); nothing was typed`,
+          );
+        }
         const field = page.locator(selector).first();
         await field.fill(text);
         if (submit) {
