@@ -269,13 +269,55 @@ function serializeSkill(fm: SkillFrontmatter, body: string): string {
     const v = fm[key];
     if (v !== undefined) data[key] = v;
   }
+  assertBodyHasNoFence(body);
   const content = body.endsWith('\n') ? body : `${body}\n`;
-  return matter.stringify(content, data);
+  // REVIEW-C10: matter.stringify(string, …) would first PARSE the string with
+  // gray-matter's default (eval-capable) options. With a file object nothing
+  // is parsed (gray-matter/index.js: only `typeof file === 'string'` is
+  // parsed; lib/stringify.js just dumps `data` with the YAML engine, js-yaml
+  // safeDump, and appends `content` verbatim).
+  return matter.stringify({ content }, data, YAML_ONLY);
+}
+
+/**
+ * REVIEW-C10: a skill body may not start (after blank lines) with a `---`
+ * fence of any kind. It could turn into frontmatter, or a `---js` block, if
+ * the file were ever re-parsed without the header (A12 bypass, injection).
+ */
+export function assertBodyHasNoFence(body: string): void {
+  if (/^﻿?(?:[ \t]*\r?\n)*[ \t]*---/.test(body)) {
+    throw new Error('skill body must not start with a "---" line (frontmatter fences are not allowed in the body)');
+  }
+}
+
+// REVIEW-M2: frontmatter is YAML only. gray-matter honours a language after the
+// opening fence (`---js`, `---javascript`) and its javascript engine eval()s the
+// block, so every non-YAML engine is replaced with one that refuses, and any
+// non-YAML fence is rejected before gray-matter sees the file.
+const refuseEngine = (lang: string) => ({
+  parse: (): never => {
+    throw new Error(`"${lang}" frontmatter is not allowed; skill frontmatter must be YAML`);
+  },
+});
+const YAML_ONLY = {
+  language: 'yaml',
+  engines: { javascript: refuseEngine('javascript'), js: refuseEngine('js'), json: refuseEngine('json') },
+};
+
+/** gray-matter locked to YAML (REVIEW-M2). Every matter() parse goes through here. */
+function parseFrontmatter(raw: string): matter.GrayMatterFile<string> {
+  const text = raw.replace(/^﻿/, '');
+  const fence = /^---([^\r\n]*)/.exec(text);
+  const lang = fence?.[1]?.trim().toLowerCase();
+  if (lang && lang !== 'yaml' && lang !== 'yml' && !lang.startsWith('-')) {
+    throw new Error(`"---${lang}" frontmatter is not allowed; skill frontmatter must be YAML`);
+  }
+  // Passing options also bypasses gray-matter's global parse cache.
+  return matter(text, YAML_ONLY);
 }
 
 function parseSkill(name: string, file: string, raw: string): Skill {
-  // Passing options bypasses gray-matter's global parse cache.
-  const parsed = matter(raw, {});
+  const parsed = parseFrontmatter(raw);
   const d = parsed.data;
   const skill: Skill = {
     name,

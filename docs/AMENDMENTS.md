@@ -83,6 +83,14 @@ These correct gaps in the blueprint in CLAUDE.md. **Where this file and CLAUDE.m
 - `browser_navigate`, `browser_click`, `browser_extract_text` and `browser_screenshot` stay ungated, so browsing stays usable.
 - This stops a page's injected instructions from making the agent fill in forms or log in with data from the chat. Exfiltration via navigation URLs is checked in the Wave 3 audit.
 
+**A25 [CORE] Browser network guard.** *(Added in Wave 3 from REVIEW-H1. The user chose the navigation policy.)*
+- **Hard block, which no approval can override:** every browser request whose host is, or resolves to, a loopback, link-local, private, CGNAT, unique-local, unspecified, multicast or other reserved address. Link-local includes the cloud metadata service at 169.254.169.254. This also covers IPv4-mapped/NAT64 IPv6 forms.
+  - It is enforced at the network layer. Playwright route handlers don't see redirect hops, so Chromium sends all traffic through an in-process pinning proxy that resolves and vets every destination. That also defeats DNS rebinding.
+  - The tool-level check fails fast with "blocked: private/metadata address".
+- **Cross-site hops need approval:** once any browser tool has run in the current turn (A11 semantics), a `browser_navigate` to a host other than the current page's host needs approval. A leading `www.` is ignored when comparing hosts. The preview shows the current page and the full target URL, so data hidden in the query string is visible.
+  - The first navigation in a turn and same-host navigation stay free. Reading, clicking and screenshots stay ungated (A24 covers typing).
+- **Accepted residual risk:** a page can still induce a leak back to its own host, or plant instructions that persist in thread history into a later turn.
+
 **A12 [CORE] Schedule guard.**
 - Validate cron expressions with croner before saving.
 - Reject anything that fires more often than every 15 minutes, to keep model costs bounded.
@@ -91,6 +99,11 @@ These correct gaps in the blueprint in CLAUDE.md. **Where this file and CLAUDE.m
 - Resolve with `UPDATE … WHERE id = ? AND status = 'PENDING'` and continue only if exactly one row changed. This prevents double execution on a double-click.
 - Pending approvals older than 24 hours become `EXPIRED`.
 - Update the Slack message to show who decided and when.
+
+**A26 [LEAD+CORE+INTEG] Approval previews are complete.** *(Added in Wave 3 from REVIEW-H11. Supersedes the 500-char `argsPreview` in LEAD.md's contract.)*
+- `ApprovalRequest.argsPreview` holds the complete arguments: the whole bash command, the full URL, the full rule or skill body. It is never truncated, because a hidden tail lets a dangerous command pass as a harmless one.
+- If a call's preview would exceed `APPROVAL_PREVIEW_MAX` (12,000 chars, in `types.ts`), the agent auto-denies it without posting buttons. The denial reason tells the model to split the work into smaller steps.
+- Slack renders the whole preview across as many code-block sections as needed (each under Slack's 3,000-char block limit). After a decision, the updated message may shorten the preview.
 
 ## Slack
 

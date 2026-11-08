@@ -22,6 +22,7 @@ import {
   setGlobalModel,
 } from './db.js';
 import { listAvailableModels, validateModelId } from './llm.js';
+import { APPROVAL_PREVIEW_MAX } from './types.js';
 import type { AgentRunner, ApprovalRequest, SlackPort } from './types.js';
 
 // ─── Pure helpers ───────────────────────────────────────────────────────────
@@ -115,26 +116,83 @@ export function safeErrorLine(err: unknown): string {
   return `:x: Sorry, that failed${cleaned ? `: ${cleaned}` : ''}. The full error is in the server logs.`;
 }
 
-function escapeMrkdwn(s: string): string {
+/** Slack's required escapes, so text can't become a link, mention or hidden label (<https://evil|ok>, <!channel>). */
+export function escapeMrkdwn(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+const ZWSP = '​';
+
+/** Insert a zero-width space between adjacent backticks so the text can never close a code fence. */
+export function neutralizeBackticks(s: string): string {
+  return s.replace(/`(?=`)/g, '`' + ZWSP);
+}
+
+/** Reverse of escapeMrkdwn + neutralizeBackticks (for tests and reviewers). */
+export function unescapeForDisplay(s: string): string {
+  return s.split(ZWSP).join('').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+const SECTION_TEXT_LIMIT = 3_000;
+const FENCE_OPEN = '```\n';
+const FENCE_CLOSE = '\n```';
+
+/**
+ * A26: render the ENTIRE text as code-fenced sections, each under Slack's 3,000-char limit.
+ * No character is dropped; the only changes are Slack escapes and zero-width spaces.
+ * Fences sit on their own lines, so content never touches them.
+ */
+export function codeSections(text: string): string[] {
+  const safe = neutralizeBackticks(text);
+  const budget = SECTION_TEXT_LIMIT - FENCE_OPEN.length - FENCE_CLOSE.length - 20;
+  const pieces: string[] = [];
+  let cur = '';
+  for (const ch of safe) {
+    // iterates by code point, so surrogate pairs stay together
+    const esc = escapeMrkdwn(ch);
+    if (cur.length + esc.length > budget) {
+      pieces.push(cur);
+      cur = '';
+    }
+    cur += esc;
+  }
+  if (cur !== '' || pieces.length === 0) pieces.push(cur);
+  return pieces.map((p) => FENCE_OPEN + p + FENCE_CLOSE);
+}
+
+/** First section only: for the shortened post-decision and expiry messages. */
 function codeBlock(s: string): string {
-  return '```' + escapeMrkdwn(s.replace(/```/g, "'''")) + '```';
+  return codeSections(s)[0]!;
 }
 
 function slackDate(ms: number): string {
   return `<!date^${Math.floor(ms / 1000)}^{date_short_pretty} at {time}|${new Date(ms).toISOString()}>`;
 }
 
-/** Block Kit for the approval request (tool name, args in a code block, Approve/Reject). */
+/**
+ * Block Kit for the approval request: tool name, the COMPLETE args (A26) and Approve/Reject.
+ * If the preview is over APPROVAL_PREVIEW_MAX, returns a notice with NO buttons: the agent
+ * auto-denies such calls, and a human must never be asked to approve text they can't fully see.
+ */
 export function approvalBlocks(req: ApprovalRequest): KnownBlock[] {
+  const tool = escapeMrkdwn(req.toolName.replace(/`/g, ''));
+  if (req.argsPreview.length > APPROVAL_PREVIEW_MAX) {
+    return [
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `:no_entry: \`${tool}\` was denied automatically: its arguments are too long to review (over ${APPROVAL_PREVIEW_MAX} characters).`,
+        },
+      },
+    ];
+  }
   return [
     {
       type: 'section',
-      text: { type: 'mrkdwn', text: `:lock: *Approval needed:* \`${req.toolName.replace(/`/g, '')}\`` },
+      text: { type: 'mrkdwn', text: `:lock: *Approval needed:* \`${tool}\`` },
     },
-    { type: 'section', text: { type: 'mrkdwn', text: codeBlock(req.argsPreview.slice(0, 2_500)) } },
+    ...codeSections(req.argsPreview).map((text): KnownBlock => ({ type: 'section', text: { type: 'mrkdwn', text } })),
     {
       type: 'actions',
       block_id: `approval_${req.id}`,
@@ -169,7 +227,7 @@ export function decidedBlocks(opts: {
   const icon = opts.verdict === 'Approved' ? ':white_check_mark:' : opts.verdict === 'Rejected' ? ':no_entry_sign:' : ':hourglass:';
   const who = opts.userId ? ` by <@${opts.userId}>` : '';
   return [
-    { type: 'section', text: { type: 'mrkdwn', text: `${icon} \`${opts.toolName.replace(/`/g, '')}\` *${opts.verdict}*${who} on ${slackDate(opts.at)}` } },
+    { type: 'section', text: { type: 'mrkdwn', text: `${icon} \`${escapeMrkdwn(opts.toolName.replace(/`/g, ''))}\` *${opts.verdict}*${who} on ${slackDate(opts.at)}` } },
     { type: 'section', text: { type: 'mrkdwn', text: codeBlock(opts.argsPreview.slice(0, 2_500)) } },
   ];
 }

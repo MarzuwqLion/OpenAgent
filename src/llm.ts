@@ -29,7 +29,8 @@ type Registry = ReturnType<typeof createProviderRegistry<RegistryProviders>>;
 const SUGGESTED_MODELS: Record<Exclude<ProviderName, 'custom'>, string[]> = {
   anthropic: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'],
   openai: ['gpt-5.5', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5'],
-  google: ['gemini-pro-latest', 'gemini-flash-latest', 'gemini-3.1-pro-preview', 'gemini-2.5-pro', 'gemini-2.5-flash'],
+  // REVIEW-H2: gemini-2.5-pro/-flash were retired for new users (404); these three were live-verified in Wave 3.
+  google: ['gemini-pro-latest', 'gemini-flash-latest', 'gemini-3.1-pro-preview'],
   // OpenRouter accepts any `vendor/model` slug (its type is plain string).
   openrouter: ['anthropic/claude-sonnet-5-5', 'openai/gpt-5.5', 'google/gemini-2.5-pro'],
   deepseek: ['deepseek-v4-pro', 'deepseek-v4-flash'],

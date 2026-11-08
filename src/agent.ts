@@ -44,6 +44,7 @@ import { browserApprovalPreview } from './tools/browser.js';
 import { createTools } from './tools/index.js';
 import { errorMessage, previewArgs, TOOL_RESULT_MAX_CHARS, trimHistory, truncateToolResult } from './tools/util.js';
 import {
+  APPROVAL_PREVIEW_MAX,
   SCHEDULER_USER_ID,
   type AgentRunner,
   type AgentTurnInput,
@@ -58,7 +59,7 @@ export { truncateToolResult, trimHistory } from './tools/util.js'; // A06
 
 /** generateText stops after this many steps (spec Phase 5). */
 export const MAX_STEPS = 15;
-/** ApprovalRequest.argsPreview cap (types.ts). */
+/** @deprecated A26: argsPreview is never truncated; kept only for importers. Use APPROVAL_PREVIEW_MAX. */
 export const ARGS_PREVIEW_MAX = 500;
 /** Cap for MEMORY.md and the skill body inside the system prompt. */
 const PROMPT_SECTION_MAX = 20_000;
@@ -72,7 +73,8 @@ export const LEARNING_LOOP_INSTRUCTION =
 export const DENIAL_INSTRUCTION = "If a tool call is denied, do not retry it; tell the user it wasn't done.";
 
 const SUPERSEDED_BY = 'system:superseded';
-const SUPERSEDED_REASON = 'Not run: the user sent a new message before approving this call.';
+const SUPERSEDED_REASON =
+  "Not run: the user sent a new message before this call was approved, so it was cancelled. Tell the user it wasn't done.";
 const EXPIRED_REASON = 'Not run: the approval request expired or was withdrawn.';
 
 // ─── System prompt ──────────────────────────────────────────────────────
@@ -87,6 +89,8 @@ export interface SystemPromptInput {
   userId: string;
   timeZone: string;
   now?: Date;
+  /** Facts about this turn the model must relay (e.g. REVIEW-M3 approved calls run before the new message). */
+  turnNotes?: string[];
 }
 
 export function buildSystemPrompt(p: SystemPromptInput): string {
@@ -136,6 +140,9 @@ export function buildSystemPrompt(p: SystemPromptInput): string {
       p.skill.description ? `Description: ${p.skill.description}` : '',
       truncateToolResult(p.skill.body.trim(), PROMPT_SECTION_MAX),
     );
+  }
+  if (p.turnNotes && p.turnNotes.length > 0) {
+    lines.push('', '## This turn', ...p.turnNotes.map((n) => `- ${n}`));
   }
   return lines.filter((l, i, a) => !(l === '' && a[i - 1] === '')).join('\n');
 }
@@ -219,6 +226,16 @@ export function closeDanglingToolCalls(messages: ModelMessage[], reason: string)
   }
   if (content.length > 0) messages.push({ role: 'tool', content });
   return closed;
+}
+
+/** Merge consecutive trailing tool messages into one (providers expect one tool turn per assistant turn). */
+function mergeTrailingToolMessages(messages: ModelMessage[]): void {
+  for (;;) {
+    const last = messages.at(-1);
+    const prev = messages.at(-2);
+    if (last?.role !== 'tool' || prev?.role !== 'tool') return;
+    messages.splice(-2, 2, { ...prev, content: [...prev.content, ...last.content] });
+  }
 }
 
 /**
@@ -322,13 +339,63 @@ function toToolOutput(e: { output?: unknown; error?: string }): ToolResultPart['
 
 // ─── Approval previews ──────────────────────────────────────────────────
 
-function approvalPreview(toolName: string, toolCallId: string, input: unknown): string {
-  const custom = browserApprovalPreview(toolName, toolCallId, input, ARGS_PREVIEW_MAX); // A24
-  if (custom !== undefined) return custom.length > ARGS_PREVIEW_MAX ? previewArgs(custom, ARGS_PREVIEW_MAX) : custom;
+/**
+ * A26: the COMPLETE, untruncated rendering of a gated call's arguments (a
+ * hidden tail would be an approval bypass). Callers must check the length
+ * against APPROVAL_PREVIEW_MAX before asking a human.
+ */
+export function approvalPreview(toolName: string, toolCallId: string, input: unknown): string {
+  const custom = browserApprovalPreview(toolName, toolCallId, input); // A24/A25
+  if (custom !== undefined) return custom;
   if (toolName === 'bash' && typeof (input as { command?: unknown } | null)?.command === 'string') {
-    return previewArgs((input as { command: string }).command, ARGS_PREVIEW_MAX);
+    return (input as { command: string }).command;
   }
-  return previewArgs(input, ARGS_PREVIEW_MAX);
+  return renderArgsInFull(input);
+}
+
+function renderArgsInFull(input: unknown): string {
+  if (typeof input === 'string') return input;
+  try {
+    return JSON.stringify(input, null, 2) ?? String(input);
+  } catch {
+    return String(input);
+  }
+}
+
+/** A26: denial reason for a call whose arguments are too long to review in Slack. */
+export function tooLongToReviewReason(chars: number): string {
+  return (
+    `Arguments too long to review in Slack (${chars} chars, max ${APPROVAL_PREVIEW_MAX}). ` +
+    'Not run. Split the work into smaller steps.'
+  );
+}
+
+type NeedsApprovalFn = (input: unknown, options: { toolCallId: string; messages: ModelMessage[]; context: unknown }) => unknown;
+
+/**
+ * A03 + A26: generateText-level approval. Evaluates the tool's own
+ * needsApproval exactly as the SDK would; a call that needs approval but
+ * whose complete preview exceeds APPROVAL_PREVIEW_MAX is denied
+ * automatically (no DB row, no buttons). The SDK feeds the denial back to the
+ * model inside the same generateText loop, so it can react; the loop stays
+ * bounded by stopWhen.
+ */
+function makeToolApproval(tools: ToolSet) {
+  return async ({ toolCall, messages }: { toolCall: { toolName: string; toolCallId: string; input: unknown }; messages: ModelMessage[] }) => {
+    const t = tools[toolCall.toolName] as { needsApproval?: boolean | NeedsApprovalFn } | undefined;
+    const na = t?.needsApproval;
+    const needed =
+      typeof na === 'function'
+        ? Boolean(await na(toolCall.input, { toolCallId: toolCall.toolCallId, messages, context: undefined }))
+        : Boolean(na);
+    if (!needed) return { type: 'not-applicable' as const };
+    const chars = approvalPreview(toolCall.toolName, toolCall.toolCallId, toolCall.input).length;
+    if (chars > APPROVAL_PREVIEW_MAX) {
+      console.warn(`[agent] A26: auto-denied ${toolCall.toolName} ${toolCall.toolCallId}: preview is ${chars} chars`);
+      return { type: 'denied' as const, reason: tooLongToReviewReason(chars) };
+    }
+    return { type: 'user-approval' as const };
+  };
 }
 
 // ─── Runner ─────────────────────────────────────────────────────────────
@@ -374,6 +441,19 @@ export function createAgentRunner(deps: AgentDeps): AgentRunner {
     }
     const { modelId, model } = await resolveModel(threadTs, skill?.model);
     const noop = (text = ''): AgentTurnResult => ({ text, modelId, pendingApprovals: [] });
+
+    const ctx: ToolContext = {
+      threadTs,
+      channelId,
+      userId,
+      ...(skillName !== undefined ? { skillName } : {}),
+      slack,
+      scheduler,
+      turnState: { browserUsed: false }, // A11: fresh per turn
+    };
+    const executed: Executed = new Map();
+    const tools = wrapTools(createTools(ctx), executed);
+    const turnNotes: string[] = [];
 
     // ── 1. Append the approval response(s) or the user message ──
     let resumedApprovals: ToolApprovalResponse[] = [];
@@ -421,26 +501,33 @@ export function createAgentRunner(deps: AgentDeps): AgentRunner {
       resumedApprovals = responses;
     } else if (input.userMessage !== undefined) {
       // A new message while approvals are pending supersedes them: deny in the
-      // DB (a late click then fails resolveApproval) and in the history.
-      for (const p of listPendingApprovals(threadTs)) resolveApproval(p.id, false, SUPERSEDED_BY);
-      closeDanglingToolCalls(history, SUPERSEDED_REASON);
+      // DB first (a click from now on fails resolveApproval) ...
+      const superseded = listPendingApprovals(threadTs).filter((p) => resolveApproval(p.id, false, SUPERSEDED_BY));
+      // ... REVIEW-M3: but a sibling the user already APPROVED is run, not dropped ...
+      const ran = await runApprovedSiblings(history);
+      // ... and everything else still open is closed as not run.
+      const denied = closeDanglingToolCalls(history, SUPERSEDED_REASON);
+      mergeTrailingToolMessages(history);
+      if (ran.length > 0) {
+        // The executed calls are facts: persist them even if the model call below fails.
+        saveThread({ threadTs, channelId, messages: fitHistory(capToolResults(history), cfg.HISTORY_MAX_MESSAGES), skillName: input.skillName ?? null });
+        turnNotes.push(
+          `Before this message, ${ran.length} tool call(s) the user had already approved were run: ${ran.join(', ')}. ` +
+            'Their results are in the conversation above; briefly tell the user what ran and the outcome.',
+        );
+      }
+      if (denied > 0 || superseded.length > 0) {
+        turnNotes.push(
+          'Tool calls that were still waiting for approval were cancelled and NOT run, because the user sent a new ' +
+            'message first. Do not claim they ran; ask again if they are still needed.',
+        );
+      }
       history.push({ role: 'user', content: input.userMessage });
     } else {
       throw new Error('runAgentTurn needs a userMessage or an approvalResponse');
     }
 
     // ── 2. Generate ──
-    const ctx: ToolContext = {
-      threadTs,
-      channelId,
-      userId,
-      ...(skillName !== undefined ? { skillName } : {}),
-      slack,
-      scheduler,
-      turnState: { browserUsed: false }, // A11: fresh per turn
-    };
-    const executed: Executed = new Map();
-    const tools = wrapTools(createTools(ctx), executed);
     const system = buildSystemPrompt({
       modelId,
       availableModels: listAvailableModels(),
@@ -450,6 +537,7 @@ export function createAgentRunner(deps: AgentDeps): AgentRunner {
       channelId,
       userId,
       timeZone: cfg.TZ,
+      turnNotes,
     });
     const max = cfg.HISTORY_MAX_MESSAGES;
 
@@ -460,6 +548,7 @@ export function createAgentRunner(deps: AgentDeps): AgentRunner {
         system,
         messages: fitHistory(history, max),
         tools,
+        toolApproval: makeToolApproval(tools), // A26
         stopWhen: stepCountIs(MAX_STEPS),
       });
     } catch (err) {
@@ -510,6 +599,60 @@ export function createAgentRunner(deps: AgentDeps): AgentRunner {
     }
 
     return { text: result.text, modelId, pendingApprovals };
+
+    /**
+     * REVIEW-M3: before a new user message supersedes a paused step, run every
+     * call in it whose approval row is APPROVED (the user clicked Approve, but
+     * the step was still waiting on a sibling). Appends its approval response
+     * (if missing) and its real result to the history. Returns "tool (args)"
+     * labels of what ran. Rows were already moved off PENDING by the caller,
+     * so no click can race this; a queued approval turn for the same call
+     * later finds it answered and does nothing (no double execution).
+     */
+    async function runApprovedSiblings(h: ModelMessage[]): Promise<string[]> {
+      const idx = indexHistory(h);
+      const deniedInHistory = new Set<string>();
+      for (const m of h) {
+        for (const p of toolParts(m)) {
+          if (p.type === 'tool-approval-response' && !p.approved) deniedInHistory.add(p.approvalId);
+        }
+      }
+      const responses: ToolApprovalResponse[] = [];
+      const results: ToolResultPart[] = [];
+      const labels: string[] = [];
+      for (const r of idx.requests.values()) {
+        if (idx.results.has(r.toolCallId) || deniedInHistory.has(r.approvalId)) continue;
+        if (decisionOf(getApprovalByApprovalId(r.approvalId), threadTs) !== 'APPROVED') continue;
+        const call = idx.calls.get(r.toolCallId);
+        if (!call) continue;
+        if (!idx.responded.has(r.approvalId)) {
+          responses.push({ type: 'tool-approval-response', approvalId: r.approvalId, approved: true });
+        }
+        const t = (tools as Record<string, { execute?: (input: unknown, options: unknown) => unknown }>)[call.toolName];
+        let entry: { output?: unknown; error?: string };
+        if (typeof t?.execute !== 'function') {
+          entry = { error: `tool ${call.toolName} is not available any more; nothing was run` };
+        } else {
+          try {
+            let out = await t.execute(call.input, { toolCallId: call.toolCallId, messages: h, context: undefined });
+            if (isAsyncIterable(out)) {
+              let last: unknown;
+              for await (const chunk of out) last = chunk;
+              out = last;
+            }
+            entry = executed.get(call.toolCallId) ?? { output: out };
+          } catch (err) {
+            entry = executed.get(call.toolCallId) ?? { error: truncateToolResult(errorMessage(err)) };
+          }
+        }
+        results.push({ type: 'tool-result', toolCallId: call.toolCallId, toolName: call.toolName, output: toToolOutput(entry) });
+        labels.push(`${call.toolName} (${previewArgs(call.input, 120)})${entry.error !== undefined ? ' [failed]' : ''}`);
+      }
+      if (responses.length > 0) appendApprovalResponses(h, responses);
+      if (results.length > 0) h.push({ role: 'tool', content: results });
+      mergeTrailingToolMessages(h);
+      return labels;
+    }
 
     function persistApprovedRuns(h: ModelMessage[], responses: ToolApprovalResponse[], ran: Executed): void {
       const idx = indexHistory(h);

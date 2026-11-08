@@ -14,9 +14,16 @@ export interface ApprovalRequest {
   threadTs: string;
   channelId: string;
   toolName: string;
-  /** Human-readable tool arguments, truncated to 500 chars. */
+  /**
+   * A26: the COMPLETE human-readable tool arguments — never truncated, since a
+   * hidden tail is an approval bypass. At most APPROVAL_PREVIEW_MAX chars: the
+   * agent auto-denies longer calls instead of asking. Slack renders all of it.
+   */
   argsPreview: string;
 }
+
+/** A26: longest argsPreview a human is asked to approve; longer tool calls are denied automatically. */
+export const APPROVAL_PREVIEW_MAX = 12_000;
 
 export interface SlackPort {
   postMessage(channel: string, text: string, threadTs?: string): Promise<{ ts: string }>;

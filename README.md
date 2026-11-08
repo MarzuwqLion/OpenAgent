@@ -31,7 +31,7 @@ Set at least one key in `.env`. Models are addressed as `provider:model`, and `D
 |---|---|---|
 | `anthropic` | `ANTHROPIC_API_KEY` | `anthropic:claude-sonnet-5-5` |
 | `openai` | `OPENAI_API_KEY` | `openai:gpt-5` |
-| `google` | `GOOGLE_GENERATIVE_AI_API_KEY` | `google:gemini-2.5-pro` |
+| `google` | `GOOGLE_GENERATIVE_AI_API_KEY` | `google:gemini-pro-latest` |
 | `openrouter` | `OPENROUTER_API_KEY` | `openrouter:<vendor>/<model>` |
 | `deepseek` | `DEEPSEEK_API_KEY` | `deepseek:deepseek-v4-pro` |
 | `xai` (Grok) | `XAI_API_KEY` (alias `GROK_API_KEY`) | `xai:grok-4.7` |
@@ -53,7 +53,7 @@ Model names change often; check each provider's docs for current IDs.
 ### Using it
 
 - **Talk to it:** DM it, or `@mention` it in a channel. Replies in the thread continue the conversation.
-- **Switch models:** `/model` shows the active model and the available ones; `/model openai:gpt-5` switches the global default. You can also ask in a thread ("use gemini-2.5-pro for this thread").
+- **Switch models:** `/model` shows the active model and the available ones; `/model openai:gpt-5` switches the global default. You can also ask in a thread ("use gemini-pro-latest for this thread").
 - **Skills:** markdown files in `./data/skills/*.md` with YAML frontmatter (`name`, `description`, `schedule`, `channel`, `model`). A skill with a cron `schedule` runs on time (in your `TZ`) and posts a thread you can reply to with feedback. Feedback becomes a committed edit to the skill or to `MEMORY.md`; ask the agent to revert if it got it wrong.
 - **Follow-ups:** the agent can schedule a one-off wake-up in a thread (up to 30 days). Follow-ups survive restarts.
 
@@ -65,7 +65,9 @@ Model names change often; check each provider's docs for current IDs.
 
 - **Bash:** `BASH_APPROVAL_MODE=always` (default) requires approval for every command. `allowlist` lets a single simple read-only command (`ls cat head tail wc grep pwd date du df stat file`, with no shell metacharacters) run without approval; everything else still asks.
 - **After browsing:** once a turn has used any browser tool, writing memory or skills, switching the model for a skill or globally, and scheduling a follow-up all need approval. This stops a web page from injecting a permanent rule.
-- **Typing into web pages:** `browser_type` always needs approval, and the preview shows the URL, the selector and the text. Navigating, clicking, extracting and screenshots don't.
+- **Typing into web pages:** `browser_type` always needs approval, and the preview shows the URL, the selector and the text. Clicking, extracting and screenshots don't.
+- **Browser network guard:** the browser can never reach loopback, private, link-local or cloud-metadata addresses (for example 169.254.169.254). This is enforced at the network layer by a vetting proxy that checks every request and redirect, and no approval can override it.
+- **Cross-site navigation:** once the agent has used a browser tool in a turn, navigating to a different site needs an Approve click, and the preview shows the full URL so data hidden in a query string is visible. The first navigation and same-site navigation stay free.
 - Skill schedules are validated and can't fire more often than every 15 minutes.
 
 **What the sandbox can and can't touch.**

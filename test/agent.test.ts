@@ -128,9 +128,11 @@ describe.skipIf(!ready)('approval round-trip (A03, A13)', () => {
     expect(JSON.stringify(getThread(THREAD)?.messages)).toContain('tool-approval-request');
   });
 
-  it('argsPreview is truncated to ~500 chars', async () => {
-    const { r1 } = await pauseOnBash(`echo ${'a'.repeat(2_000)}`);
-    expect(r1.pendingApprovals[0]!.argsPreview.length).toBeLessThanOrEqual(503);
+  it('argsPreview is the complete command, never truncated (A26)', async () => {
+    const command = `echo ${'a'.repeat(2_000)} ; echo HIDDEN_TAIL`;
+    const { r1 } = await pauseOnBash(command);
+    expect(r1.pendingApprovals[0]!.argsPreview).toBe(command);
+    expect(slack.approvals[0]!.argsPreview).toBe(command);
   });
 
   it('approve → the tool executes exactly once and its output reaches the model', async () => {

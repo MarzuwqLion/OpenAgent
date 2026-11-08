@@ -27,7 +27,7 @@ export function createScheduleModelTools(ctx: ToolContext) {
     description:
       'Switch the LLM. scope "thread" = this Slack thread from the next message on; scope "skill" = a named skill ' +
       '(edits its frontmatter and commits); scope "global" = the default for all threads (like /model). ' +
-      'modelId must be a full provider:model ID, e.g. google:gemini-2.5-pro. Pass "" to clear a thread or skill override.',
+      'modelId must be a full provider:model ID, e.g. google:gemini-pro-latest. Pass "" to clear a thread or skill override.',
     inputSchema: z.object({
       modelId: z.string(),
       scope: z.enum(['thread', 'skill', 'global']),
