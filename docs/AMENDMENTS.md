@@ -104,6 +104,16 @@ These correct gaps in the blueprint in CLAUDE.md. **Where this file and CLAUDE.m
 - `ApprovalRequest.argsPreview` holds the complete arguments: the whole bash command, the full URL, the full rule or skill body. It is never truncated, because a hidden tail lets a dangerous command pass as a harmless one.
 - If a call's preview would exceed `APPROVAL_PREVIEW_MAX` (12,000 chars, in `types.ts`), the agent auto-denies it without posting buttons. The denial reason tells the model to split the work into smaller steps.
 - Slack renders the whole preview across as many code-block sections as needed (each under Slack's 3,000-char block limit). After a decision, the updated message may shorten the preview.
+- **Previews are faithful, too** *(added after Wave 3 from REVIEW-M13)*. Characters that are invisible or reorder text must never reach Slack raw. Otherwise the text a human approves can look different from what runs (the "Trojan Source" technique). The renderer replaces each one with a visible token such as `⟨U+202E⟩`:
+  - control characters other than newline and tab;
+  - Unicode format characters (`\p{Cf}`), which include the bidi controls, zero-width characters, the BOM and tag characters;
+  - line and paragraph separators, and every space character other than a plain space (non-breaking spaces, for example);
+  - variation selectors, the combining grapheme joiner and the Hangul filler characters;
+  - every other Unicode `Default_Ignorable_Code_Point` (e.g. Khmer U+17B4/17B5 and the Mongolian free variation selectors, REVIEW-L16).
+- A literal `⟨` in the input is shown as `⟨U+27E8⟩`, so every `⟨U+…⟩` token in a preview is a real substitution and typed text can't imitate one. It isn't counted in the warning. Tokens are packed as single units only up to their real maximum length (REVIEW-M14).
+- When a preview contains any of these, a warning line above it says how many and that they are part of what will run.
+- Nothing is auto-denied for this, since emoji and right-to-left text legitimately contain such characters.
+- The renderer's own zero-width spaces (between adjacent backticks) are added after the substitution, so they stay invisible.
 
 ## Slack
 

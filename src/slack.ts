@@ -121,16 +121,35 @@ export function escapeMrkdwn(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-const ZWSP = '​';
+const ZWSP = '\u200B';
 
 /** Insert a zero-width space between adjacent backticks so the text can never close a code fence. */
 export function neutralizeBackticks(s: string): string {
   return s.replace(/`(?=`)/g, '`' + ZWSP);
 }
 
-/** Reverse of escapeMrkdwn + neutralizeBackticks (for tests and reviewers). */
+/**
+ * Reverse of escapeMrkdwn + neutralizeBackticks (for tests and reviewers).
+ * A26 / REVIEW-M13: it does NOT reverse revealHiddenChars tokens (⟨U+XXXX⟩ stay as tokens).
+ */
 export function unescapeForDisplay(s: string): string {
   return s.split(ZWSP).join('').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+// A26 / REVIEW-M13: invisible and text-direction characters (Trojan Source). Everything here is
+// replaced by a visible token, except newline, tab and a plain space.
+const HIDDEN_CHARS = /[\p{C}\p{Z}\u034F\u115F\u1160\u2800\u3164\uFFA0\uFE00-\uFE0F\u{E0100}-\u{E01EF}\p{Default_Ignorable_Code_Point}⟨]/gu; // A26 / REVIEW-L16: DI code points; REVIEW-M14: literal ⟨ too
+const TOKEN_OR_CHAR = /⟨U\+[0-9A-F]{4,6}⟩|[\s\S]/gu;
+
+/** A26 / REVIEW-M13: replace each hidden code point with `⟨U+XXXX⟩`; `count` is how many were replaced. */
+export function revealHiddenChars(s: string): { text: string; count: number } {
+  let count = 0;
+  const text = s.replace(HIDDEN_CHARS, (ch) => {
+    if (ch === '\n' || ch === '\t' || ch === ' ') return ch;
+    if (ch !== '⟨') count++; // REVIEW-M14: literal ⟨ is tokenised but not counted
+    return `⟨U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}⟩`;
+  });
+  return { text, count };
 }
 
 const SECTION_TEXT_LIMIT = 3_000;
@@ -139,17 +158,20 @@ const FENCE_CLOSE = '\n```';
 
 /**
  * A26: render the ENTIRE text as code-fenced sections, each under Slack's 3,000-char limit.
- * No character is dropped; the only changes are Slack escapes and zero-width spaces.
- * Fences sit on their own lines, so content never touches them.
+ * No character is dropped. Changes: Slack escapes; hidden/text-direction characters become
+ * visible ⟨U+XXXX⟩ tokens (A26 / REVIEW-M13); and the renderer's own zero-width space between
+ * adjacent backticks, added AFTER the substitution so it stays invisible.
+ * Order: revealHiddenChars, neutralizeBackticks, per-unit escapeMrkdwn. A token is one unit and is
+ * never split across sections. Fences sit on their own lines, so content never touches them.
  */
 export function codeSections(text: string): string[] {
-  const safe = neutralizeBackticks(text);
+  const safe = neutralizeBackticks(revealHiddenChars(text).text);
   const budget = SECTION_TEXT_LIMIT - FENCE_OPEN.length - FENCE_CLOSE.length - 20;
   const pieces: string[] = [];
   let cur = '';
-  for (const ch of safe) {
-    // iterates by code point, so surrogate pairs stay together
-    const esc = escapeMrkdwn(ch);
+  for (const unit of safe.match(TOKEN_OR_CHAR) ?? []) {
+    // units are whole tokens or single code points, so neither tokens nor surrogate pairs split
+    const esc = escapeMrkdwn(unit);
     if (cur.length + esc.length > budget) {
       pieces.push(cur);
       cur = '';
@@ -187,11 +209,26 @@ export function approvalBlocks(req: ApprovalRequest): KnownBlock[] {
       },
     ];
   }
+  // A26 / REVIEW-M13: warn when the preview holds invisible or text-direction characters.
+  const hidden = revealHiddenChars(req.argsPreview).count;
+  const warning: KnownBlock[] =
+    hidden > 0
+      ? [
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `:warning: This preview contains ${hidden} invisible or text-direction character(s), shown as ⟨U+XXXX⟩. They are part of what will run.`,
+            },
+          },
+        ]
+      : [];
   return [
     {
       type: 'section',
       text: { type: 'mrkdwn', text: `:lock: *Approval needed:* \`${tool}\`` },
     },
+    ...warning,
     ...codeSections(req.argsPreview).map((text): KnownBlock => ({ type: 'section', text: { type: 'mrkdwn', text } })),
     {
       type: 'actions',
@@ -228,7 +265,7 @@ export function decidedBlocks(opts: {
   const who = opts.userId ? ` by <@${opts.userId}>` : '';
   return [
     { type: 'section', text: { type: 'mrkdwn', text: `${icon} \`${escapeMrkdwn(opts.toolName.replace(/`/g, ''))}\` *${opts.verdict}*${who} on ${slackDate(opts.at)}` } },
-    { type: 'section', text: { type: 'mrkdwn', text: codeBlock(opts.argsPreview.slice(0, 2_500)) } },
+    { type: 'section', text: { type: 'mrkdwn', text: codeBlock(Array.from(opts.argsPreview).slice(0, 2_500).join('')) /* A26: by code point, never mid-pair */ } },
   ];
 }
 

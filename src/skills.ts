@@ -285,7 +285,7 @@ function serializeSkill(fm: SkillFrontmatter, body: string): string {
  * the file were ever re-parsed without the header (A12 bypass, injection).
  */
 export function assertBodyHasNoFence(body: string): void {
-  if (/^﻿?(?:[ \t]*\r?\n)*[ \t]*---/.test(body)) {
+  if (/^\uFEFF?(?:[ \t]*\r?\n)*[ \t]*---/.test(body)) {
     throw new Error('skill body must not start with a "---" line (frontmatter fences are not allowed in the body)');
   }
 }
@@ -306,7 +306,7 @@ const YAML_ONLY = {
 
 /** gray-matter locked to YAML (REVIEW-M2). Every matter() parse goes through here. */
 function parseFrontmatter(raw: string): matter.GrayMatterFile<string> {
-  const text = raw.replace(/^﻿/, '');
+  const text = raw.replace(/^\uFEFF/, '');
   const fence = /^---([^\r\n]*)/.exec(text);
   const lang = fence?.[1]?.trim().toLowerCase();
   if (lang && lang !== 'yaml' && lang !== 'yml' && !lang.startsWith('-')) {
